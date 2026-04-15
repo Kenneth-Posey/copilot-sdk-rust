@@ -854,7 +854,7 @@ impl Session {
     /// Trigger manual context compaction.
     pub async fn compact(&self) -> Result<()> {
         let params = serde_json::json!({ "sessionId": self.session_id });
-        (self.invoke_fn)("session.compaction.compact", Some(params)).await?;
+        (self.invoke_fn)("session.history.compact", Some(params)).await?;
         Ok(())
     }
 
