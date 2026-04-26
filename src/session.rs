@@ -30,8 +30,11 @@ use tokio::sync::{broadcast, RwLock};
 pub type EventHandler = Arc<dyn Fn(&SessionEvent) + Send + Sync>;
 
 /// Handler for permission requests.
-pub type PermissionHandler =
-    Arc<dyn Fn(&PermissionRequest) -> PermissionRequestResult + Send + Sync>;
+///
+/// Re-exported from [`crate::types`]; defined there so it can appear in
+/// [`crate::types::SessionConfig`] and [`crate::types::ResumeSessionConfig`]
+/// without a circular dependency.
+pub use crate::types::PermissionHandler;
 
 /// Handler for tool invocations.
 pub type ToolHandler = Arc<dyn Fn(&str, &Value) -> ToolResultObject + Send + Sync>;
@@ -503,12 +506,38 @@ impl Session {
     // =========================================================================
 
     /// Register a permission handler.
+    ///
+    /// # Race-condition warning
+    ///
+    /// The Copilot CLI only emits `PermissionRequested` events when the
+    /// session was created with `request_permission: Some(true)` in
+    /// [`SessionConfig`] (or [`ResumeSessionConfig`]).  If that flag is not
+    /// set at **session-creation time**, this handler will never be called,
+    /// regardless of when it is registered.
+    ///
+    /// Even when `request_permission` is `true`, the CLI can emit a
+    /// `PermissionRequested` event immediately after the session starts.
+    /// To avoid missing that first event, register the handler **before**
+    /// sending the first message to the session.  If no handler is
+    /// registered when an event arrives, the default response is
+    /// [`PermissionRequestResult::denied()`].
     pub async fn register_permission_handler<F>(&self, handler: F)
     where
         F: Fn(&PermissionRequest) -> PermissionRequestResult + Send + Sync + 'static,
     {
         let mut state = self.state.write().await;
         state.permission_handler = Some(Arc::new(handler));
+    }
+
+    /// Install a pre-built [`PermissionHandler`] directly.
+    ///
+    /// Unlike [`register_permission_handler`], this method accepts an already-wrapped
+    /// `Arc<dyn Fn(...)>` and stores it without creating an extra `Arc` layer.
+    /// Used by [`crate::client::Client`] to register the handler atomically before
+    /// the session becomes visible to the event dispatch loop.
+    pub async fn set_permission_handler(&self, handler: PermissionHandler) {
+        let mut state = self.state.write().await;
+        state.permission_handler = Some(handler);
     }
 
     /// Handle a permission request.
@@ -694,7 +723,7 @@ impl Session {
     /// Get the current model for this session.
     pub async fn get_model(&self) -> Result<String> {
         let params = serde_json::json!({ "sessionId": self.session_id });
-        let result = (self.invoke_fn)("session.model.get_current", Some(params)).await?;
+        let result = (self.invoke_fn)("session.model.getCurrent", Some(params)).await?;
         result
             .get("modelId")
             .and_then(|v| v.as_str())
@@ -713,7 +742,7 @@ impl Session {
                 params["reasoningEffort"] = serde_json::json!(effort);
             }
         }
-        (self.invoke_fn)("session.model.switch_to", Some(params)).await?;
+        (self.invoke_fn)("session.model.switchTo", Some(params)).await?;
         Ok(())
     }
 
@@ -821,7 +850,7 @@ impl Session {
     /// Get the currently active agent.
     pub async fn get_current_agent(&self) -> Result<Option<AgentInfo>> {
         let params = serde_json::json!({ "sessionId": self.session_id });
-        let result = (self.invoke_fn)("session.agent.get_current", Some(params)).await?;
+        let result = (self.invoke_fn)("session.agent.getCurrent", Some(params)).await?;
         if result.is_null() || result.get("name").is_none() {
             return Ok(None);
         }
@@ -907,7 +936,7 @@ impl Session {
     /// List files in the session workspace.
     pub async fn workspace_list_files(&self) -> Result<Vec<WorkspaceFile>> {
         let params = serde_json::json!({ "sessionId": self.session_id });
-        let result = (self.invoke_fn)("session.workspace.list_files", Some(params)).await?;
+        let result = (self.invoke_fn)("session.workspaces.listFiles", Some(params)).await?;
         let files = result
             .get("files")
             .cloned()
@@ -922,7 +951,7 @@ impl Session {
             "sessionId": self.session_id,
             "path": path,
         });
-        let result = (self.invoke_fn)("session.workspace.read_file", Some(params)).await?;
+        let result = (self.invoke_fn)("session.workspaces.readFile", Some(params)).await?;
         result
             .get("content")
             .and_then(|v| v.as_str())
@@ -937,7 +966,7 @@ impl Session {
             "path": path,
             "content": content,
         });
-        (self.invoke_fn)("session.workspace.create_file", Some(params)).await?;
+        (self.invoke_fn)("session.workspaces.createFile", Some(params)).await?;
         Ok(())
     }
 }

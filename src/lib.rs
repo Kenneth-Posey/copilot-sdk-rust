@@ -86,6 +86,8 @@ pub use types::{
     ModelSupports,
     ModelVisionLimits,
     // Permission types
+    PermissionHandler,
+    PermissionHandlerField,
     PermissionRequest,
     PermissionRequestResult,
     PingResponse,
@@ -226,7 +228,7 @@ pub use process::{
 
 // Re-export session types
 pub use session::{
-    EventHandler, EventSubscription, InvokeFuture, PermissionHandler, RegisteredTool, Session,
+    EventHandler, EventSubscription, InvokeFuture, RegisteredTool, Session,
     ToolHandler, UserInputHandler,
 };
 

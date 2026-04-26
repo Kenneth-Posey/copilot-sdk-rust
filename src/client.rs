@@ -475,6 +475,18 @@ impl RpcClient {
             RpcClient::Tcp(rpc) => rpc.invoke(method, params).await,
         }
     }
+
+    async fn invoke_with_timeout(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        timeout: Duration,
+    ) -> Result<Value> {
+        match self {
+            RpcClient::Stdio(rpc) => rpc.invoke_with_timeout(method, params, timeout).await,
+            RpcClient::Tcp(rpc) => rpc.invoke_with_timeout(method, params, timeout).await,
+        }
+    }
 }
 
 // =============================================================================
@@ -735,6 +747,11 @@ impl Client {
             }
         }
 
+        // Register permission handler atomically before session becomes visible to dispatch loop
+        if let Some(handler) = config.permission_handler.take() {
+            session.set_permission_handler(handler).await;
+        }
+
         // Store session
         self.sessions
             .write()
@@ -787,6 +804,11 @@ impl Client {
             if hooks.has_any() {
                 session.register_hooks(hooks).await;
             }
+        }
+
+        // Register permission handler atomically before session becomes visible to dispatch loop
+        if let Some(handler) = config.permission_handler.take() {
+            session.set_permission_handler(handler).await;
         }
 
         // Store session
@@ -1392,7 +1414,7 @@ impl Client {
             Box::pin(async move {
                 let rpc = rpc.lock().await;
                 let rpc = rpc.as_ref().ok_or(CopilotError::NotConnected)?;
-                rpc.invoke(&method, params).await
+                rpc.invoke_with_timeout(&method, params, Duration::from_secs(90)).await
             }) as crate::session::InvokeFuture
         };
 
