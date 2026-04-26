@@ -1248,7 +1248,7 @@ mod tests {
             extension_data: HashMap::new(),
         };
         let result = session.handle_permission_request(&request).await;
-        assert!(result.kind.contains("denied"));
+        assert!(result.is_denied());
 
         // Register custom handler that approves
         session
@@ -1256,7 +1256,7 @@ mod tests {
             .await;
 
         let result = session.handle_permission_request(&request).await;
-        assert_eq!(result.kind, "approved");
+        assert_eq!(result.kind, "approve-once");
     }
 
     #[tokio::test]
@@ -1375,7 +1375,7 @@ mod tests {
         );
         assert_eq!(calls[0].1["sessionId"], "test");
         assert_eq!(calls[0].1["requestId"], "req-perm-1");
-        assert_eq!(calls[0].1["result"]["kind"], "approved");
+        assert_eq!(calls[0].1["result"]["kind"], "approve-once");
     }
 
     #[tokio::test]

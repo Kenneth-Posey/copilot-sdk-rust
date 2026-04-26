@@ -203,29 +203,45 @@ pub struct PermissionRequestResult {
 
 impl PermissionRequestResult {
     /// Create an approved permission result.
+    ///
+    /// Sends `"approve-once"` — the user-interactive vocabulary accepted by CLI v1.0.36+.
     pub fn approved() -> Self {
         Self {
-            kind: "approved".to_string(),
+            kind: "approve-once".to_string(),
             rules: None,
         }
     }
 
     /// Create a denied permission result.
+    ///
+    /// Sends `"user-not-available"` — the user-interactive vocabulary accepted by CLI v1.0.36+.
     pub fn denied() -> Self {
         Self {
-            kind: "denied-no-approval-rule-and-could-not-request-from-user".to_string(),
+            kind: "user-not-available".to_string(),
             rules: None,
         }
     }
 
     /// Returns true if the permission was approved.
+    ///
+    /// Matches both the current user-interactive vocabulary (`"approve-once"`,
+    /// `"approve-for-session"`) and the legacy `"approved"` value that may appear
+    /// in received `PermissionDecision` responses for backward compatibility.
     pub fn is_approved(&self) -> bool {
-        self.kind == "approved"
+        matches!(
+            self.kind.as_str(),
+            "approve-once" | "approve-for-session" | "approved"
+        )
     }
 
     /// Returns true if the permission was denied.
+    ///
+    /// Matches both the current user-interactive vocabulary (`"reject"`,
+    /// `"user-not-available"`) and the legacy `starts_with("denied")` pattern
+    /// for backward compatibility with received `PermissionDecision` responses.
     pub fn is_denied(&self) -> bool {
-        self.kind.starts_with("denied")
+        matches!(self.kind.as_str(), "reject" | "user-not-available")
+            || self.kind.starts_with("denied")
     }
 }
 
@@ -1715,12 +1731,12 @@ mod tests {
     #[test]
     fn test_permission_result() {
         let approved = PermissionRequestResult::approved();
-        assert_eq!(approved.kind, "approved");
+        assert_eq!(approved.kind, "approve-once");
         assert!(approved.is_approved());
         assert!(!approved.is_denied());
 
         let denied = PermissionRequestResult::denied();
-        assert!(denied.kind.starts_with("denied"));
+        assert_eq!(denied.kind, "user-not-available");
         assert!(denied.is_denied());
         assert!(!denied.is_approved());
     }
