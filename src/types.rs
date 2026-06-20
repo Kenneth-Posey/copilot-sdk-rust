@@ -203,29 +203,45 @@ pub struct PermissionRequestResult {
 
 impl PermissionRequestResult {
     /// Create an approved permission result.
+    ///
+    /// Sends `"approve-once"` — the user-interactive vocabulary accepted by CLI v1.0.36+.
     pub fn approved() -> Self {
         Self {
-            kind: "approved".to_string(),
+            kind: "approve-once".to_string(),
             rules: None,
         }
     }
 
     /// Create a denied permission result.
+    ///
+    /// Sends `"user-not-available"` — the user-interactive vocabulary accepted by CLI v1.0.36+.
     pub fn denied() -> Self {
         Self {
-            kind: "denied-no-approval-rule-and-could-not-request-from-user".to_string(),
+            kind: "user-not-available".to_string(),
             rules: None,
         }
     }
 
     /// Returns true if the permission was approved.
+    ///
+    /// Matches both the current user-interactive vocabulary (`"approve-once"`,
+    /// `"approve-for-session"`) and the legacy `"approved"` value that may appear
+    /// in received `PermissionDecision` responses for backward compatibility.
     pub fn is_approved(&self) -> bool {
-        self.kind == "approved"
+        matches!(
+            self.kind.as_str(),
+            "approve-once" | "approve-for-session" | "approved"
+        )
     }
 
     /// Returns true if the permission was denied.
+    ///
+    /// Matches both the current user-interactive vocabulary (`"reject"`,
+    /// `"user-not-available"`) and the legacy `starts_with("denied")` pattern
+    /// for backward compatibility with received `PermissionDecision` responses.
     pub fn is_denied(&self) -> bool {
-        self.kind.starts_with("denied")
+        matches!(self.kind.as_str(), "reject" | "user-not-available")
+            || self.kind.starts_with("denied")
     }
 }
 
@@ -824,6 +840,67 @@ impl std::fmt::Debug for SessionHooks {
 }
 
 // =============================================================================
+// Permission Handler Type
+// =============================================================================
+
+/// Handler for permission requests from the Copilot CLI.
+///
+/// Receives a [`PermissionRequest`] and returns a [`PermissionRequestResult`].
+/// The handler must be `Send + Sync + 'static` so it can be shared across
+/// async tasks.
+pub type PermissionHandler =
+    Arc<dyn Fn(&PermissionRequest) -> PermissionRequestResult + Send + Sync>;
+
+/// A slot that holds an optional [`PermissionHandler`] and implements [`Debug`].
+///
+/// Used as the `permission_handler` field type in [`SessionConfig`] and
+/// [`ResumeSessionConfig`] so that those structs can derive `Debug` despite the
+/// underlying callback not implementing `Debug`. The display shows only whether
+/// a handler is installed.
+///
+/// # Usage
+///
+/// ```rust,ignore
+/// use copilot_sdk::{PermissionHandler, PermissionHandlerField, SessionConfig};
+///
+/// let handler: PermissionHandler = std::sync::Arc::new(|_req| {
+///     copilot_sdk::PermissionRequestResult::approved()
+/// });
+/// let config = SessionConfig {
+///     permission_handler: PermissionHandlerField::some(handler),
+///     ..Default::default()
+/// };
+/// ```
+#[derive(Clone, Default)]
+pub struct PermissionHandlerField(Option<PermissionHandler>);
+
+impl PermissionHandlerField {
+    /// Create a field with the given handler installed.
+    pub fn some(handler: PermissionHandler) -> Self {
+        Self(Some(handler))
+    }
+
+    /// Create an empty field (no handler).
+    pub fn none() -> Self {
+        Self(None)
+    }
+
+    /// Take the handler out of the field, leaving `None`.
+    pub fn take(&mut self) -> Option<PermissionHandler> {
+        self.0.take()
+    }
+}
+
+impl std::fmt::Debug for PermissionHandlerField {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            Some(_) => f.write_str("Some(<permission_handler>)"),
+            None => f.write_str("None"),
+        }
+    }
+}
+
+// =============================================================================
 // Session Configuration
 // =============================================================================
 
@@ -876,6 +953,13 @@ pub struct SessionConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub working_directory: Option<String>,
 
+    /// When `true`, automatically discovers MCP server configurations
+    /// (`.mcp.json`, `.vscode/mcp.json`) and skill directories from the
+    /// working directory. Mirrors the Go SDK's `EnableConfigDiscovery` field
+    /// (wire name: `"enableConfigDiscovery"`).
+    #[serde(skip_serializing_if = "Option::is_none", rename = "enableConfigDiscovery")]
+    pub enable_config_discovery: Option<bool>,
+
     /// Client name identifier.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_name: Option<String>,
@@ -887,6 +971,15 @@ pub struct SessionConfig {
     /// Session hooks for pre/post tool use, session lifecycle, etc.
     #[serde(skip)]
     pub hooks: Option<SessionHooks>,
+
+    /// Permission handler to install before the session becomes visible to
+    /// the event dispatch loop.  Set this field instead of calling
+    /// [`Session::register_permission_handler`] after creation to eliminate
+    /// the race window between session insertion and handler registration.
+    ///
+    /// Not transmitted over the wire.
+    #[serde(skip)]
+    pub permission_handler: PermissionHandlerField,
 
     /// If true and provider/model not explicitly set, load from `COPILOT_SDK_BYOK_*` env vars.
     ///
@@ -930,6 +1023,13 @@ pub struct ResumeSessionConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub working_directory: Option<String>,
 
+    /// When `true`, automatically discovers MCP server configurations
+    /// (`.mcp.json`, `.vscode/mcp.json`) and skill directories from the
+    /// working directory. Mirrors the Go SDK's `EnableConfigDiscovery` field
+    /// (wire name: `"enableConfigDiscovery"`).
+    #[serde(skip_serializing_if = "Option::is_none", rename = "enableConfigDiscovery")]
+    pub enable_config_discovery: Option<bool>,
+
     /// Client name identifier.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_name: Option<String>,
@@ -949,6 +1049,15 @@ pub struct ResumeSessionConfig {
     /// Session hooks for pre/post tool use, session lifecycle, etc.
     #[serde(skip)]
     pub hooks: Option<SessionHooks>,
+
+    /// Permission handler to install before the session becomes visible to
+    /// the event dispatch loop.  Set this field instead of calling
+    /// [`Session::register_permission_handler`] after creation to eliminate
+    /// the race window between session insertion and handler registration.
+    ///
+    /// Not transmitted over the wire.
+    #[serde(skip)]
+    pub permission_handler: PermissionHandlerField,
 
     /// If true and provider not explicitly set, load from `COPILOT_SDK_BYOK_*` env vars.
     ///
@@ -1622,12 +1731,12 @@ mod tests {
     #[test]
     fn test_permission_result() {
         let approved = PermissionRequestResult::approved();
-        assert_eq!(approved.kind, "approved");
+        assert_eq!(approved.kind, "approve-once");
         assert!(approved.is_approved());
         assert!(!approved.is_denied());
 
         let denied = PermissionRequestResult::denied();
-        assert!(denied.kind.starts_with("denied"));
+        assert_eq!(denied.kind, "user-not-available");
         assert!(denied.is_denied());
         assert!(!denied.is_approved());
     }
